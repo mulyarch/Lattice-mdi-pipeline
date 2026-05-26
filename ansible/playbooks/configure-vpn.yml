@@ -1,0 +1,156 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# PLAYBOOK: Configure & Verify Cross-Cloud VPN
+# Validates VPN tunnel connectivity and configures routing
+# Runs on nodes that need cross-cloud communication
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- name: Configure Cross-Cloud VPN Connectivity
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    target_env: "{{ target_env | default('dev') }}"
+    project_name: "mdi-sovereign"
+
+    # Network CIDRs
+    aws_vpc_cidr: "10.0.0.0/16"
+    azure_vnet_cidr: "10.1.0.0/16"
+
+    # VPN health check endpoints
+    vpn_health_checks:
+      - name: "Azure VNet Gateway"
+        host: "10.1.0.1"
+        port: 443
+      - name: "Azure AKS API"
+        host: "10.1.0.10"
+        port: 443
+
+  tasks:
+    # ─────────────────────────────────────────────
+    # VERIFY VPN CONNECTIVITY
+    # ─────────────────────────────────────────────
+    - name: Check VPN tunnel connectivity to Azure
+      ansible.builtin.wait_for:
+        host: "{{ item.host }}"
+        port: "{{ item.port }}"
+        timeout: 10
+        state: started
+      loop: "{{ vpn_health_checks }}"
+      ignore_errors: true
+      register: vpn_connectivity
+
+    - name: Report VPN connectivity status
+      ansible.builtin.debug:
+        msg: "VPN to {{ item.item.name }} ({{ item.item.host }}:{{ item.item.port }}): {{ 'CONNECTED' if item is succeeded else 'UNREACHABLE' }}"
+      loop: "{{ vpn_connectivity.results }}"
+
+    # ─────────────────────────────────────────────
+    # CONFIGURE ROUTING
+    # ─────────────────────────────────────────────
+    - name: Ensure Azure VNet route exists
+      ansible.builtin.command: >
+        ip route show {{ azure_vnet_cidr }}
+      register: route_check
+      changed_when: false
+      failed_when: false
+
+    - name: Log routing table for audit
+      ansible.builtin.shell: |
+        echo "=== Routing Table ($(date -u)) ===" >> /var/log/sovereign-vpn.log
+        ip route >> /var/log/sovereign-vpn.log
+        echo "" >> /var/log/sovereign-vpn.log
+      changed_when: false
+
+    # ─────────────────────────────────────────────
+    # DNS CONFIGURATION (cross-cloud resolution)
+    # ─────────────────────────────────────────────
+    - name: Configure cross-cloud DNS forwarding
+      ansible.builtin.copy:
+        content: |
+          # Cross-Cloud DNS Configuration
+          # Forward Azure private DNS queries to Azure DNS resolver
+          # This enables resolution of *.privatelink.vaultcore.azure.net
+          # and *.privatelink.blob.core.windows.net from AWS nodes
+
+          server=/privatelink.vaultcore.azure.net/10.1.0.2
+          server=/privatelink.blob.core.windows.net/10.1.0.2
+          server=/azmk8s.io/10.1.0.2
+        dest: /etc/dnsmasq.d/cross-cloud.conf
+        mode: '0644'
+      notify: restart dnsmasq
+      ignore_errors: true
+
+    # ─────────────────────────────────────────────
+    # IPSEC MONITORING
+    # ─────────────────────────────────────────────
+    - name: Deploy VPN monitoring script
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          # Cross-Cloud VPN Health Monitor
+          # Checks tunnel status and logs results
+
+          LOGFILE="/var/log/sovereign-vpn-health.log"
+          TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          AZURE_GATEWAY="10.1.0.1"
+
+          # Ping test to Azure gateway
+          if ping -c 3 -W 5 $AZURE_GATEWAY > /dev/null 2>&1; then
+            echo "$TIMESTAMP [OK] VPN tunnel to Azure is UP (RTT: $(ping -c 1 -W 5 $AZURE_GATEWAY | grep time= | awk -F'time=' '{print $2}'))" >> $LOGFILE
+          else
+            echo "$TIMESTAMP [CRITICAL] VPN tunnel to Azure is DOWN" >> $LOGFILE
+            logger -p daemon.crit "Cross-cloud VPN: Tunnel to Azure is DOWN"
+          fi
+
+          # Check for packet loss
+          LOSS=$(ping -c 10 -W 5 $AZURE_GATEWAY 2>/dev/null | grep "packet loss" | awk '{print $6}')
+          if [ "$LOSS" != "0%" ] && [ -n "$LOSS" ]; then
+            echo "$TIMESTAMP [WARNING] Packet loss to Azure: $LOSS" >> $LOGFILE
+            logger -p daemon.warning "Cross-cloud VPN: Packet loss $LOSS"
+          fi
+
+          # Log tunnel metrics
+          echo "$TIMESTAMP [METRICS] Tunnel stats:" >> $LOGFILE
+          ip -s tunnel show 2>/dev/null >> $LOGFILE || echo "  No tunnel interfaces found" >> $LOGFILE
+        dest: /usr/local/bin/vpn-health-monitor.sh
+        mode: '0755'
+
+    - name: Schedule VPN health monitoring
+      ansible.builtin.cron:
+        name: "VPN health monitor"
+        minute: "*/2"
+        job: "/usr/local/bin/vpn-health-monitor.sh"
+        user: root
+
+    # ─────────────────────────────────────────────
+    # FIREWALL RULES (iptables for VPN traffic)
+    # ─────────────────────────────────────────────
+    - name: Allow VPN traffic from Azure
+      ansible.builtin.iptables:
+        chain: INPUT
+        source: "{{ azure_vnet_cidr }}"
+        jump: ACCEPT
+        comment: "Allow inbound from Azure allied VNet"
+      ignore_errors: true
+
+    - name: Allow VPN traffic to Azure
+      ansible.builtin.iptables:
+        chain: OUTPUT
+        destination: "{{ azure_vnet_cidr }}"
+        jump: ACCEPT
+        comment: "Allow outbound to Azure allied VNet"
+      ignore_errors: true
+
+    - name: Save iptables rules
+      ansible.builtin.shell: iptables-save > /etc/iptables/rules.v4
+      changed_when: true
+      ignore_errors: true
+
+  handlers:
+    - name: restart dnsmasq
+      ansible.builtin.systemd:
+        name: dnsmasq
+        state: restarted
+      ignore_errors: true

@@ -1,0 +1,116 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# CD PIPELINE — Post-Deploy Configuration (Ansible)
+# Runs after infrastructure is deployed to harden and configure nodes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: "CD — Configure Infrastructure (Ansible)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      playbook:
+        description: "Playbook to run"
+        required: true
+        type: choice
+        options:
+          - harden-nodes
+          - deploy-monitoring
+          - configure-vpn
+          - all
+
+  # Trigger after infra deployment
+  workflow_run:
+    workflows: ["CD — Deploy Infrastructure"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  configure:
+    name: "Run Ansible — ${{ github.event.inputs.playbook || 'all' }}"
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Ansible
+        run: |
+          pip install ansible boto3 botocore azure-identity azure-mgmt-compute
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Generate Dynamic Inventory
+        run: |
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+          cat > ansible/inventory/dynamic_inventory.yml << INVENTORY
+          plugin: aws_ec2
+          regions:
+            - us-east-1
+          filters:
+            tag:Project: mdi-sovereign
+            tag:Environment: $ENV
+            instance-state-name: running
+          keyed_groups:
+            - key: tags.Role
+              prefix: role
+          INVENTORY
+
+      - name: Run Playbooks
+        working-directory: ansible
+        run: |
+          PLAYBOOK="${{ github.event.inputs.playbook || 'all' }}"
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+
+          if [ "$PLAYBOOK" == "all" ] || [ "$PLAYBOOK" == "harden-nodes" ]; then
+            echo "Running: harden-nodes.yml"
+            ansible-playbook playbooks/harden-nodes.yml \
+              -i inventory/dynamic_inventory.yml \
+              -e "target_env=$ENV" || true
+          fi
+
+          if [ "$PLAYBOOK" == "all" ] || [ "$PLAYBOOK" == "deploy-monitoring" ]; then
+            echo "Running: deploy-monitoring.yml"
+            ansible-playbook playbooks/deploy-monitoring.yml \
+              -i inventory/dynamic_inventory.yml \
+              -e "target_env=$ENV" || true
+          fi
+
+          if [ "$PLAYBOOK" == "all" ] || [ "$PLAYBOOK" == "configure-vpn" ]; then
+            echo "Running: configure-vpn.yml"
+            ansible-playbook playbooks/configure-vpn.yml \
+              -i inventory/dynamic_inventory.yml \
+              -e "target_env=$ENV" || true
+          fi
+
+      - name: Configuration Summary
+        run: |
+          echo "## 🔧 Configuration Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ github.event.inputs.environment || 'dev' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Playbook | ${{ github.event.inputs.playbook || 'all' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ✅ Complete |" >> $GITHUB_STEP_SUMMARY

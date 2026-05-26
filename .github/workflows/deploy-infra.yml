@@ -1,0 +1,396 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# CD PIPELINE — Infrastructure Deployment
+# Deploys sovereign multi-cloud infrastructure with approval gates
+#
+# Flow: Plan → Review → Approve → Apply (per environment)
+# Environments: dev → staging → prod (promotion model)
+#
+# Defense deployment pattern:
+#   - No auto-deploy to production
+#   - Human approval required for each environment
+#   - Full plan output visible before apply
+#   - Rollback capability via Terraform state
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: "CD — Deploy Infrastructure"
+
+on:
+  # Manual trigger with environment selection
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      action:
+        description: "Terraform action"
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      confirm_destroy:
+        description: "Type 'DESTROY' to confirm destruction (required for destroy action)"
+        required: false
+        type: string
+
+  # Auto-trigger on merge to main (plan only for safety)
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+
+# Prevent concurrent deployments to same environment
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.7.0"
+  AWS_REGION: "us-east-1"
+
+# Required permissions for OIDC authentication
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  # ─────────────────────────────────────────────
+  # STAGE 1: Pre-flight Checks
+  # ─────────────────────────────────────────────
+  preflight:
+    name: "Pre-flight Checks"
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      action: ${{ steps.set-env.outputs.action }}
+
+    steps:
+      - name: Set Environment
+        id: set-env
+        run: |
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+          ACTION="${{ github.event.inputs.action || 'plan' }}"
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "action=$ACTION" >> $GITHUB_OUTPUT
+          echo "## 🚀 Deployment Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`$ENV\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Action | \`$ACTION\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Validate Destroy Confirmation
+        if: github.event.inputs.action == 'destroy'
+        run: |
+          if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY" ]; then
+            echo "❌ Destroy action requires typing 'DESTROY' in the confirmation field"
+            exit 1
+          fi
+          echo "⚠️ DESTROY confirmed for ${{ github.event.inputs.environment }}"
+
+  # ─────────────────────────────────────────────
+  # STAGE 2: Terraform Plan
+  # ─────────────────────────────────────────────
+  plan:
+    name: "Terraform Plan — ${{ needs.preflight.outputs.environment }}"
+    runs-on: ubuntu-latest
+    needs: preflight
+    environment: ${{ needs.preflight.outputs.environment }}-plan
+    outputs:
+      plan_exitcode: ${{ steps.plan.outputs.exitcode }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      # OIDC Authentication — No long-lived credentials
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-${{ needs.preflight.outputs.environment }}
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          terraform init \
+            -backend-config="key=sovereign-infra/${{ needs.preflight.outputs.environment }}/terraform.tfstate"
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: terraform
+        run: |
+          terraform plan \
+            -var="environment=${{ needs.preflight.outputs.environment }}" \
+            -var="azure_subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            -var-file="environments/${{ needs.preflight.outputs.environment }}/terraform.tfvars" \
+            -out=tfplan \
+            -detailed-exitcode \
+            -no-color 2>&1 | tee plan_output.txt
+
+          echo "exitcode=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Plan Summary
+        working-directory: terraform
+        run: |
+          echo "## 📋 Terraform Plan — ${{ needs.preflight.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          terraform show -no-color tfplan >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No plan file generated" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ needs.preflight.outputs.environment }}
+          path: terraform/tfplan
+          retention-days: 5
+
+      - name: Upload Plan Output
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-output-${{ needs.preflight.outputs.environment }}
+          path: terraform/plan_output.txt
+          retention-days: 5
+
+  # ─────────────────────────────────────────────
+  # STAGE 3: Security Review (automated)
+  # ─────────────────────────────────────────────
+  security-review:
+    name: "Security Review — Plan Analysis"
+    runs-on: ubuntu-latest
+    needs: [preflight, plan]
+    if: needs.preflight.outputs.action == 'apply'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Plan Output
+        uses: actions/download-artifact@v4
+        with:
+          name: plan-output-${{ needs.preflight.outputs.environment }}
+
+      - name: Analyze Plan for Security Risks
+        run: |
+          echo "## 🔒 Security Review" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Check for dangerous operations
+          if grep -q "will be destroyed" plan_output.txt 2>/dev/null; then
+            echo "⚠️ **WARNING: Resources will be DESTROYED**" >> $GITHUB_STEP_SUMMARY
+            grep "will be destroyed" plan_output.txt >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Check for security group changes
+          if grep -q "aws_security_group" plan_output.txt 2>/dev/null; then
+            echo "🔐 Security group changes detected — review carefully" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Check for IAM changes
+          if grep -q "aws_iam" plan_output.txt 2>/dev/null; then
+            echo "🔑 IAM changes detected — review carefully" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Check for encryption changes
+          if grep -q "kms\|encrypt" plan_output.txt 2>/dev/null; then
+            echo "🔐 Encryption configuration changes detected" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Automated security review complete" >> $GITHUB_STEP_SUMMARY
+
+  # ─────────────────────────────────────────────
+  # STAGE 4: Manual Approval Gate
+  # ─────────────────────────────────────────────
+  approve:
+    name: "Approval Gate — ${{ needs.preflight.outputs.environment }}"
+    runs-on: ubuntu-latest
+    needs: [preflight, plan, security-review]
+    if: needs.preflight.outputs.action == 'apply'
+    environment: ${{ needs.preflight.outputs.environment }}-approve
+
+    steps:
+      - name: Approval Granted
+        run: |
+          echo "## ✅ Deployment Approved" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Approved by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ needs.preflight.outputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Timestamp | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+
+  # ─────────────────────────────────────────────
+  # STAGE 5: Terraform Apply
+  # ─────────────────────────────────────────────
+  apply:
+    name: "Terraform Apply — ${{ needs.preflight.outputs.environment }}"
+    runs-on: ubuntu-latest
+    needs: [preflight, plan, approve]
+    if: needs.preflight.outputs.action == 'apply'
+    environment: ${{ needs.preflight.outputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-deploy-${{ needs.preflight.outputs.environment }}
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Download Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ needs.preflight.outputs.environment }}
+          path: terraform/
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          terraform init \
+            -backend-config="key=sovereign-infra/${{ needs.preflight.outputs.environment }}/terraform.tfstate"
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: |
+          terraform apply -auto-approve tfplan
+
+      - name: Apply Summary
+        working-directory: terraform
+        run: |
+          echo "## 🎉 Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ needs.preflight.outputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployed by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Timestamp | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Output Infrastructure Details
+        working-directory: terraform
+        run: |
+          echo "## 📊 Infrastructure Outputs" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          terraform output -no-color >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No outputs available" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ─────────────────────────────────────────────
+  # STAGE 6: Terraform Destroy (emergency only)
+  # ─────────────────────────────────────────────
+  destroy:
+    name: "⚠️ Terraform Destroy — ${{ needs.preflight.outputs.environment }}"
+    runs-on: ubuntu-latest
+    needs: [preflight]
+    if: needs.preflight.outputs.action == 'destroy'
+    environment: ${{ needs.preflight.outputs.environment }}-destroy
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-destroy-${{ needs.preflight.outputs.environment }}
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          terraform init \
+            -backend-config="key=sovereign-infra/${{ needs.preflight.outputs.environment }}/terraform.tfstate"
+
+      - name: Terraform Destroy
+        working-directory: terraform
+        run: |
+          terraform destroy \
+            -var="environment=${{ needs.preflight.outputs.environment }}" \
+            -var="azure_subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            -var-file="environments/${{ needs.preflight.outputs.environment }}/terraform.tfvars" \
+            -auto-approve
+
+      - name: Destroy Summary
+        run: |
+          echo "## ⚠️ Infrastructure Destroyed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ needs.preflight.outputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Action | DESTROY |" >> $GITHUB_STEP_SUMMARY
+          echo "| Executed by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Timestamp | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+
+  # ─────────────────────────────────────────────
+  # STAGE 7: Post-Deploy Notification
+  # ─────────────────────────────────────────────
+  notify:
+    name: "Notify"
+    runs-on: ubuntu-latest
+    needs: [preflight, apply]
+    if: always() && needs.preflight.outputs.action == 'apply'
+
+    steps:
+      - name: Deployment Notification
+        run: |
+          STATUS="${{ needs.apply.result }}"
+          ENV="${{ needs.preflight.outputs.environment }}"
+
+          if [ "$STATUS" == "success" ]; then
+            echo "✅ Deployment to $ENV succeeded"
+          else
+            echo "❌ Deployment to $ENV failed"
+          fi

@@ -1,0 +1,269 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# PLAYBOOK: Harden Worker Nodes
+# Applies CIS Benchmark Level 2 hardening to EKS/AKS worker nodes
+# Aligned with DISA STIG and IRAP requirements
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- name: Harden Sovereign Infrastructure Nodes
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    target_env: "{{ target_env | default('dev') }}"
+    sysctl_hardening:
+      # Network hardening
+      net.ipv4.ip_forward: 1  # Required for K8s pod networking
+      net.ipv4.conf.all.send_redirects: 0
+      net.ipv4.conf.default.send_redirects: 0
+      net.ipv4.conf.all.accept_redirects: 0
+      net.ipv4.conf.default.accept_redirects: 0
+      net.ipv4.conf.all.secure_redirects: 0
+      net.ipv4.conf.default.secure_redirects: 0
+      net.ipv4.conf.all.log_martians: 1
+      net.ipv4.conf.default.log_martians: 1
+      net.ipv4.icmp_echo_ignore_broadcasts: 1
+      net.ipv4.icmp_ignore_bogus_error_responses: 1
+      net.ipv4.conf.all.rp_filter: 1
+      net.ipv4.conf.default.rp_filter: 1
+      net.ipv4.tcp_syncookies: 1
+      # IPv6 — disable if not needed
+      net.ipv6.conf.all.accept_ra: 0
+      net.ipv6.conf.default.accept_ra: 0
+      net.ipv6.conf.all.accept_redirects: 0
+      net.ipv6.conf.default.accept_redirects: 0
+      # Kernel hardening
+      kernel.randomize_va_space: 2
+      kernel.dmesg_restrict: 1
+      kernel.kptr_restrict: 2
+      kernel.yama.ptrace_scope: 2
+      fs.suid_dumpable: 0
+      fs.protected_hardlinks: 1
+      fs.protected_symlinks: 1
+
+    disabled_services:
+      - bluetooth
+      - cups
+      - avahi-daemon
+      - rpcbind
+      - nfs-server
+      - vsftpd
+      - telnet
+
+    required_packages:
+      - aide
+      - auditd
+      - fail2ban
+      - rkhunter
+      - unattended-upgrades
+
+  tasks:
+    # ─────────────────────────────────────────────
+    # SYSTEM UPDATES
+    # ─────────────────────────────────────────────
+    - name: Update all packages to latest
+      ansible.builtin.apt:
+        upgrade: dist
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+    - name: Update all packages (RHEL/Amazon Linux)
+      ansible.builtin.yum:
+        name: "*"
+        state: latest
+        security: true
+      when: ansible_os_family == "RedHat"
+
+    # ─────────────────────────────────────────────
+    # INSTALL SECURITY PACKAGES
+    # ─────────────────────────────────────────────
+    - name: Install required security packages
+      ansible.builtin.package:
+        name: "{{ required_packages }}"
+        state: present
+      ignore_errors: true
+
+    # ─────────────────────────────────────────────
+    # KERNEL HARDENING (sysctl)
+    # ─────────────────────────────────────────────
+    - name: Apply sysctl hardening parameters
+      ansible.posix.sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        sysctl_set: true
+        state: present
+        reload: true
+        sysctl_file: /etc/sysctl.d/99-sovereign-hardening.conf
+      loop: "{{ sysctl_hardening | dict2items }}"
+
+    # ─────────────────────────────────────────────
+    # DISABLE UNNECESSARY SERVICES
+    # ─────────────────────────────────────────────
+    - name: Disable unnecessary services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop: "{{ disabled_services }}"
+      ignore_errors: true
+
+    # ─────────────────────────────────────────────
+    # SSH HARDENING
+    # ─────────────────────────────────────────────
+    - name: Harden SSH configuration
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+        validate: 'sshd -t -f %s'
+      loop:
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?PermitEmptyPasswords', line: 'PermitEmptyPasswords no' }
+        - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+        - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+        - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+        - { regexp: '^#?Protocol', line: 'Protocol 2' }
+        - { regexp: '^#?LoginGraceTime', line: 'LoginGraceTime 60' }
+        - { regexp: '^#?AllowAgentForwarding', line: 'AllowAgentForwarding no' }
+        - { regexp: '^#?AllowTcpForwarding', line: 'AllowTcpForwarding no' }
+        - { regexp: '^#?Banner', line: 'Banner /etc/issue.net' }
+        - { regexp: '^#?Ciphers', line: 'Ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr' }
+        - { regexp: '^#?MACs', line: 'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com' }
+        - { regexp: '^#?KexAlgorithms', line: 'KexAlgorithms curve25519-sha256,diffie-hellman-group16-sha512' }
+      notify: restart sshd
+
+    - name: Set SSH warning banner
+      ansible.builtin.copy:
+        content: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║  AUTHORIZED ACCESS ONLY                                      ║
+          ║  This system is for authorized use only.                     ║
+          ║  All activities are monitored and recorded.                  ║
+          ║  Unauthorized access will be prosecuted.                     ║
+          ╚══════════════════════════════════════════════════════════════╝
+        dest: /etc/issue.net
+        mode: '0644'
+
+    # ─────────────────────────────────────────────
+    # FILE SYSTEM HARDENING
+    # ─────────────────────────────────────────────
+    - name: Set permissions on sensitive files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: "{{ item.mode }}"
+        owner: root
+        group: root
+      loop:
+        - { path: '/etc/passwd', mode: '0644' }
+        - { path: '/etc/shadow', mode: '0600' }
+        - { path: '/etc/group', mode: '0644' }
+        - { path: '/etc/gshadow', mode: '0600' }
+        - { path: '/etc/ssh/sshd_config', mode: '0600' }
+        - { path: '/boot/grub/grub.cfg', mode: '0600' }
+      ignore_errors: true
+
+    - name: Ensure /tmp is mounted with noexec
+      ansible.posix.mount:
+        path: /tmp
+        src: tmpfs
+        fstype: tmpfs
+        opts: defaults,noexec,nosuid,nodev
+        state: mounted
+
+    # ─────────────────────────────────────────────
+    # AUDIT LOGGING (auditd)
+    # ─────────────────────────────────────────────
+    - name: Configure auditd rules
+      ansible.builtin.copy:
+        content: |
+          # Sovereign Infrastructure Audit Rules
+          # Aligned with CIS Benchmark and DISA STIG
+
+          # Monitor changes to authentication files
+          -w /etc/passwd -p wa -k identity
+          -w /etc/group -p wa -k identity
+          -w /etc/shadow -p wa -k identity
+          -w /etc/gshadow -p wa -k identity
+          -w /etc/sudoers -p wa -k sudoers
+          -w /etc/sudoers.d/ -p wa -k sudoers
+
+          # Monitor SSH configuration
+          -w /etc/ssh/sshd_config -p wa -k sshd_config
+
+          # Monitor network configuration
+          -w /etc/sysctl.conf -p wa -k sysctl
+          -w /etc/sysctl.d/ -p wa -k sysctl
+
+          # Monitor kernel module loading
+          -w /sbin/insmod -p x -k modules
+          -w /sbin/rmmod -p x -k modules
+          -w /sbin/modprobe -p x -k modules
+
+          # Monitor file deletions
+          -a always,exit -F arch=b64 -S unlink -S unlinkat -S rename -S renameat -F auid>=1000 -F auid!=4294967295 -k delete
+
+          # Monitor privilege escalation
+          -a always,exit -F arch=b64 -S setuid -S setgid -F auid>=1000 -F auid!=4294967295 -k privilege_escalation
+
+          # Monitor container runtime
+          -w /usr/bin/containerd -p x -k container_runtime
+          -w /usr/bin/docker -p x -k container_runtime
+          -w /usr/bin/kubectl -p x -k kubectl
+
+          # Make audit configuration immutable (requires reboot to change)
+          -e 2
+        dest: /etc/audit/rules.d/sovereign.rules
+        mode: '0640'
+      notify: restart auditd
+
+    # ─────────────────────────────────────────────
+    # FAIL2BAN — Brute force protection
+    # ─────────────────────────────────────────────
+    - name: Configure fail2ban for SSH
+      ansible.builtin.copy:
+        content: |
+          [sshd]
+          enabled = true
+          port = ssh
+          filter = sshd
+          logpath = /var/log/auth.log
+          maxretry = 3
+          bantime = 3600
+          findtime = 600
+        dest: /etc/fail2ban/jail.d/sshd.conf
+        mode: '0644'
+      notify: restart fail2ban
+
+    # ─────────────────────────────────────────────
+    # AUTOMATIC SECURITY UPDATES
+    # ─────────────────────────────────────────────
+    - name: Enable automatic security updates (Debian/Ubuntu)
+      ansible.builtin.copy:
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          APT::Periodic::AutocleanInterval "7";
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        mode: '0644'
+      when: ansible_os_family == "Debian"
+
+  handlers:
+    - name: restart sshd
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted
+
+    - name: restart auditd
+      ansible.builtin.systemd:
+        name: auditd
+        state: restarted
+
+    - name: restart fail2ban
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: restarted

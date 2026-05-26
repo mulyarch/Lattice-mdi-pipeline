@@ -1,0 +1,266 @@
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# PLAYBOOK: Deploy Monitoring Stack
+# Installs and configures monitoring agents on all nodes
+# Integrates with CloudWatch (AWS) and Azure Monitor
+# ═══════════════════════════════════════════════════════════════════════════════
+
+- name: Deploy Monitoring Stack
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    target_env: "{{ target_env | default('dev') }}"
+    project_name: "mdi-sovereign"
+    cloudwatch_namespace: "{{ project_name }}/{{ target_env }}"
+
+    # Prometheus Node Exporter
+    node_exporter_version: "1.7.0"
+    node_exporter_port: 9100
+
+    # Log collection
+    log_paths:
+      - /var/log/syslog
+      - /var/log/auth.log
+      - /var/log/audit/audit.log
+      - /var/log/containers/*.log
+      - /var/log/pods/**/*.log
+
+  tasks:
+    # ─────────────────────────────────────────────
+    # PROMETHEUS NODE EXPORTER
+    # ─────────────────────────────────────────────
+    - name: Create node_exporter user
+      ansible.builtin.user:
+        name: node_exporter
+        shell: /usr/sbin/nologin
+        system: true
+        create_home: false
+
+    - name: Download node_exporter
+      ansible.builtin.get_url:
+        url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+        dest: /tmp/node_exporter.tar.gz
+        mode: '0644'
+
+    - name: Extract node_exporter
+      ansible.builtin.unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /tmp/
+        remote_src: true
+
+    - name: Install node_exporter binary
+      ansible.builtin.copy:
+        src: "/tmp/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter"
+        dest: /usr/local/bin/node_exporter
+        mode: '0755'
+        owner: root
+        group: root
+        remote_src: true
+
+    - name: Create node_exporter systemd service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Prometheus Node Exporter
+          Documentation=https://prometheus.io/docs/guides/node-exporter/
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          User=node_exporter
+          Group=node_exporter
+          Type=simple
+          ExecStart=/usr/local/bin/node_exporter \
+            --collector.filesystem.mount-points-exclude="^/(sys|proc|dev|host|etc)($$|/)" \
+            --collector.netclass.ignored-devices="^(veth.*|docker.*|br-.*)$$" \
+            --web.listen-address=:{{ node_exporter_port }}
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/node_exporter.service
+        mode: '0644'
+      notify: restart node_exporter
+
+    - name: Enable and start node_exporter
+      ansible.builtin.systemd:
+        name: node_exporter
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    # ─────────────────────────────────────────────
+    # CLOUDWATCH AGENT (AWS nodes)
+    # ─────────────────────────────────────────────
+    - name: Install CloudWatch Agent (Amazon Linux / Ubuntu)
+      block:
+        - name: Download CloudWatch Agent
+          ansible.builtin.get_url:
+            url: "https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb"
+            dest: /tmp/amazon-cloudwatch-agent.deb
+            mode: '0644'
+          when: ansible_os_family == "Debian"
+
+        - name: Install CloudWatch Agent (Debian)
+          ansible.builtin.apt:
+            deb: /tmp/amazon-cloudwatch-agent.deb
+          when: ansible_os_family == "Debian"
+
+        - name: Configure CloudWatch Agent
+          ansible.builtin.copy:
+            content: |
+              {
+                "agent": {
+                  "metrics_collection_interval": 60,
+                  "run_as_user": "cwagent"
+                },
+                "metrics": {
+                  "namespace": "{{ cloudwatch_namespace }}",
+                  "metrics_collected": {
+                    "cpu": {
+                      "measurement": ["cpu_usage_idle", "cpu_usage_user", "cpu_usage_system"],
+                      "totalcpu": true
+                    },
+                    "disk": {
+                      "measurement": ["used_percent", "inodes_free"],
+                      "resources": ["*"]
+                    },
+                    "diskio": {
+                      "measurement": ["io_time", "write_bytes", "read_bytes"]
+                    },
+                    "mem": {
+                      "measurement": ["mem_used_percent", "mem_available_percent"]
+                    },
+                    "net": {
+                      "measurement": ["bytes_sent", "bytes_recv", "packets_sent", "packets_recv"]
+                    }
+                  },
+                  "append_dimensions": {
+                    "Environment": "{{ target_env }}",
+                    "Project": "{{ project_name }}"
+                  }
+                },
+                "logs": {
+                  "logs_collected": {
+                    "files": {
+                      "collect_list": [
+                        {
+                          "file_path": "/var/log/syslog",
+                          "log_group_name": "/{{ project_name }}/{{ target_env }}/syslog",
+                          "log_stream_name": "{instance_id}",
+                          "retention_in_days": 90
+                        },
+                        {
+                          "file_path": "/var/log/auth.log",
+                          "log_group_name": "/{{ project_name }}/{{ target_env }}/auth",
+                          "log_stream_name": "{instance_id}",
+                          "retention_in_days": 90
+                        },
+                        {
+                          "file_path": "/var/log/audit/audit.log",
+                          "log_group_name": "/{{ project_name }}/{{ target_env }}/audit",
+                          "log_stream_name": "{instance_id}",
+                          "retention_in_days": 365
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            dest: /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+            mode: '0644'
+
+        - name: Start CloudWatch Agent
+          ansible.builtin.shell: |
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+              -a fetch-config \
+              -m ec2 \
+              -s \
+              -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+      when: "'aws' in group_names or ansible_system_vendor == 'Amazon EC2'"
+      ignore_errors: true
+
+    # ─────────────────────────────────────────────
+    # SECURITY MONITORING — File Integrity (AIDE)
+    # ─────────────────────────────────────────────
+    - name: Initialize AIDE database
+      ansible.builtin.command: aide --init
+      args:
+        creates: /var/lib/aide/aide.db.new
+      ignore_errors: true
+
+    - name: Set up AIDE daily check cron
+      ansible.builtin.cron:
+        name: "AIDE integrity check"
+        minute: "0"
+        hour: "3"
+        job: "/usr/bin/aide --check | /usr/bin/logger -t aide-check"
+        user: root
+
+    # ─────────────────────────────────────────────
+    # CUSTOM HEALTH CHECK SCRIPT
+    # ─────────────────────────────────────────────
+    - name: Deploy sovereign health check script
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          # Sovereign Infrastructure Health Check
+          # Runs every 5 minutes via cron
+
+          LOGFILE="/var/log/sovereign-health.log"
+          TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+          check_service() {
+            if systemctl is-active --quiet "$1"; then
+              echo "$TIMESTAMP [OK] $1 is running" >> $LOGFILE
+            else
+              echo "$TIMESTAMP [CRITICAL] $1 is NOT running" >> $LOGFILE
+              logger -p daemon.crit "Sovereign health: $1 is down"
+            fi
+          }
+
+          # Check critical services
+          check_service "kubelet"
+          check_service "containerd"
+          check_service "node_exporter"
+          check_service "auditd"
+
+          # Check disk space (alert at 85%)
+          DISK_USAGE=$(df / | awk 'NR==2 {print $5}' | tr -d '%')
+          if [ "$DISK_USAGE" -gt 85 ]; then
+            echo "$TIMESTAMP [WARNING] Disk usage at ${DISK_USAGE}%" >> $LOGFILE
+            logger -p daemon.warning "Sovereign health: Disk at ${DISK_USAGE}%"
+          fi
+
+          # Check memory (alert at 90%)
+          MEM_USAGE=$(free | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}')
+          if [ "$MEM_USAGE" -gt 90 ]; then
+            echo "$TIMESTAMP [WARNING] Memory usage at ${MEM_USAGE}%" >> $LOGFILE
+            logger -p daemon.warning "Sovereign health: Memory at ${MEM_USAGE}%"
+          fi
+
+          # Check for failed login attempts (last 5 min)
+          FAILED_LOGINS=$(journalctl --since "5 minutes ago" | grep -c "Failed password" || echo 0)
+          if [ "$FAILED_LOGINS" -gt 5 ]; then
+            echo "$TIMESTAMP [ALERT] $FAILED_LOGINS failed login attempts in last 5 min" >> $LOGFILE
+            logger -p auth.alert "Sovereign health: $FAILED_LOGINS failed logins"
+          fi
+        dest: /usr/local/bin/sovereign-health-check.sh
+        mode: '0755'
+
+    - name: Schedule health check cron
+      ansible.builtin.cron:
+        name: "Sovereign health check"
+        minute: "*/5"
+        job: "/usr/local/bin/sovereign-health-check.sh"
+        user: root
+
+  handlers:
+    - name: restart node_exporter
+      ansible.builtin.systemd:
+        name: node_exporter
+        state: restarted
+        daemon_reload: true
