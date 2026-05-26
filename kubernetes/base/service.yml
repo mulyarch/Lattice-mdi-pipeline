@@ -1,0 +1,18 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mission-data-processor
+  namespace: mission
+  labels:
+    app.kubernetes.io/name: mission-data-processor
+    app.kubernetes.io/part-of: mdi-sovereign
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mission-data-processor
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

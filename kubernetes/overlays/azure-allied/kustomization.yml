@@ -1,0 +1,59 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mission
+
+resources:
+  - ../../base
+
+patches:
+  # Patch ConfigMap for Azure
+  - target:
+      kind: ConfigMap
+      name: mission-config
+    patch: |
+      - op: replace
+        path: /data/cloud_provider
+        value: "azure"
+      - op: replace
+        path: /data/region
+        value: "australiaeast"
+
+  # Patch ServiceAccount with Azure Workload Identity
+  - target:
+      kind: ServiceAccount
+      name: mission-processor-sa
+    patch: |
+      - op: remove
+        path: /metadata/annotations/eks.amazonaws.com~1role-arn
+      - op: add
+        path: /metadata/annotations/azure.workload.identity~1client-id
+        value: "AZURE_CLIENT_ID"
+      - op: add
+        path: /metadata/labels/azure.workload.identity~1use
+        value: "true"
+
+  # Patch Deployment with Azure-specific tolerations
+  - target:
+      kind: Deployment
+      name: mission-data-processor
+    patch: |
+      - op: add
+        path: /spec/template/spec/tolerations
+        value:
+          - key: "workload"
+            operator: "Equal"
+            value: "mission-critical"
+            effect: "NoSchedule"
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value:
+          tier: mission
+          workload: mission-critical
+
+labels:
+  - pairs:
+      cloud: azure
+      environment: allied
+    includeSelectors: false

@@ -1,0 +1,54 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mission
+
+resources:
+  - ../../base
+
+patches:
+  # Patch ConfigMap for AWS
+  - target:
+      kind: ConfigMap
+      name: mission-config
+    patch: |
+      - op: replace
+        path: /data/cloud_provider
+        value: "aws"
+      - op: replace
+        path: /data/region
+        value: "us-east-1"
+
+  # Patch ServiceAccount with IRSA annotation
+  - target:
+      kind: ServiceAccount
+      name: mission-processor-sa
+    patch: |
+      - op: replace
+        path: /metadata/annotations/eks.amazonaws.com~1role-arn
+        value: "arn:aws:iam::ACCOUNT_ID:role/mdi-sovereign-mission-processor"
+
+  # Patch Deployment with AWS-specific tolerations
+  - target:
+      kind: Deployment
+      name: mission-data-processor
+    patch: |
+      - op: add
+        path: /spec/template/spec/tolerations
+        value:
+          - key: "workload"
+            operator: "Equal"
+            value: "mission-critical"
+            effect: "NoSchedule"
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value:
+          tier: mission
+          workload: mission-critical
+
+labels:
+  - pairs:
+      cloud: aws
+      environment: sovereign
+    includeSelectors: false

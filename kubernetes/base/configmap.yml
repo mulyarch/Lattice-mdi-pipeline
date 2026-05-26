@@ -1,0 +1,15 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mission-config
+  namespace: mission
+  labels:
+    app.kubernetes.io/name: mission-data-processor
+    app.kubernetes.io/part-of: mdi-sovereign
+data:
+  environment: "dev"
+  cloud_provider: "aws"
+  region: "us-east-1"
+  replication_enabled: "true"
+  log_level: "info"
