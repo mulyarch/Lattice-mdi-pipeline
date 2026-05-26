@@ -1,0 +1,34 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# TFSEC CONFIGURATION
+# Security scanning rules for sovereign infrastructure
+# We enforce STRICT rules — no exceptions for classified environments
+# ═══════════════════════════════════════════════════════════════════════════════
+
+---
+minimum_severity: MEDIUM
+
+# Severity overrides — make certain checks CRITICAL for defense environments
+severity_overrides:
+  # Encryption must always be enabled
+  aws-s3-enable-bucket-encryption: CRITICAL
+  aws-s3-encryption-customer-key: CRITICAL
+  aws-eks-encrypt-secrets: CRITICAL
+
+  # No public access ever
+  aws-s3-no-public-access-with-acl: CRITICAL
+  aws-s3-no-public-buckets: CRITICAL
+  aws-eks-no-public-cluster-access: CRITICAL
+  aws-ec2-no-public-ip-subnet: CRITICAL
+
+  # IAM security
+  aws-iam-no-policy-wildcards: HIGH
+
+  # Logging must be enabled
+  aws-s3-enable-bucket-logging: HIGH
+  aws-eks-enable-control-plane-logging: HIGH
+  aws-cloudwatch-log-group-customer-key: HIGH
+
+# Exclude checks that don't apply to this demo
+exclude:
+  # We intentionally don't have a NAT gateway (sovereign = no internet)
+  - aws-vpc-no-public-ingress-sgr

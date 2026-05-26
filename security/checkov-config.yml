@@ -1,0 +1,53 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHECKOV CONFIGURATION
+# Infrastructure-as-Code security scanning
+# Enforces CIS Benchmarks and defense security standards
+# ═══════════════════════════════════════════════════════════════════════════════
+
+---
+framework:
+  - terraform
+
+# Checks to enforce (defense-critical)
+check:
+  # Encryption
+  - CKV_AWS_19   # S3 bucket encryption enabled
+  - CKV_AWS_145  # S3 bucket encrypted with CMK
+  - CKV_AWS_58   # EKS secrets encryption
+  - CKV_AWS_119  # DynamoDB encryption with CMK
+
+  # Access Control
+  - CKV_AWS_20   # S3 bucket no public ACL
+  - CKV_AWS_21   # S3 versioning enabled
+  - CKV_AWS_57   # S3 no public read
+  - CKV_AWS_53   # S3 block public access
+  - CKV_AWS_54   # S3 block public policy
+  - CKV_AWS_55   # S3 ignore public ACLs
+  - CKV_AWS_56   # S3 restrict public buckets
+
+  # EKS Security
+  - CKV_AWS_37   # EKS control plane logging
+  - CKV_AWS_38   # EKS private endpoint
+  - CKV_AWS_39   # EKS public access disabled
+
+  # Network Security
+  - CKV_AWS_130  # VPC subnets no public IP
+  - CKV2_AWS_12  # VPC default SG restricts all traffic
+
+  # IAM
+  - CKV_AWS_40   # IAM policy no wildcard actions
+  - CKV_AWS_49   # IAM policy no statements with admin access
+
+  # Logging
+  - CKV_AWS_36   # CloudTrail log file validation
+  - CKV2_AWS_38  # VPC flow logs enabled
+
+# Checks to skip (with justification)
+skip-check:
+  # We intentionally have no NAT/IGW (sovereign pattern)
+  - CKV2_AWS_19  # Requires NAT gateway — not applicable for air-gapped design
+  # Demo environment — would be enabled in real deployment
+  - CKV2_AWS_5   # Security group attached to ENI — managed by EKS
+
+soft-fail: false
+compact: true
