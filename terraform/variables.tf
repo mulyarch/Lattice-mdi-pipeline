@@ -64,7 +64,7 @@ variable "aws_bgp_asn" {
 variable "eks_cluster_version" {
   description = "Kubernetes version for EKS cluster"
   type        = string
-  default     = "1.29"
+  default     = "1.30"
 }
 
 variable "eks_node_instance_type" {
@@ -131,7 +131,7 @@ variable "azure_bgp_asn" {
 variable "aks_kubernetes_version" {
   description = "Kubernetes version for AKS cluster"
   type        = string
-  default     = "1.29"
+  default     = "1.30"
 }
 
 variable "aks_node_vm_size" {

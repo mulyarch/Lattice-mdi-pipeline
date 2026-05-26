@@ -1,3 +1,4 @@
+data "aws_caller_identity" "current" {}
 # ═══════════════════════════════════════════════════════════════════════════════
 # AWS SOVEREIGN VPC MODULE
 # Simulates an IL5/IL6 isolated environment for classified workloads

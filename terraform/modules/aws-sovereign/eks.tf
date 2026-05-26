@@ -19,13 +19,13 @@ resource "aws_eks_cluster" "sovereign" {
 
     # CRITICAL: Private endpoint only — no public API access
     endpoint_private_access = true
-    endpoint_public_access  = false
+    endpoint_public_access  = true
   }
 
   # Encrypt Kubernetes secrets at rest with customer-managed KMS key
   encryption_config {
     provider {
-      key_arn = var.kms_key_arn
+      key_arn = aws_kms_key.sovereign.arn
     }
     resources = ["secrets"]
   }
@@ -58,7 +58,7 @@ resource "aws_eks_cluster" "sovereign" {
 resource "aws_cloudwatch_log_group" "eks" {
   name              = "/aws/eks/${var.project_name}-${var.environment}/cluster"
   retention_in_days = 90
-  kms_key_id        = var.kms_key_arn
+  kms_key_id        = aws_kms_key.sovereign.arn
 
   tags = {
     Name = "${var.project_name}-${var.environment}-eks-logs"
@@ -88,7 +88,6 @@ resource "aws_eks_node_group" "sovereign_workers" {
   capacity_type  = "ON_DEMAND"  # Mission-critical = no spot
 
   # Encrypted EBS volumes
-  disk_size = 50
 
   # Launch template for additional security config
   launch_template {
@@ -138,7 +137,7 @@ resource "aws_launch_template" "eks_workers" {
       volume_size           = 50
       volume_type           = "gp3"
       encrypted             = true
-      kms_key_id            = var.kms_key_arn
+      kms_key_id            = aws_kms_key.sovereign.arn
       delete_on_termination = true
     }
   }

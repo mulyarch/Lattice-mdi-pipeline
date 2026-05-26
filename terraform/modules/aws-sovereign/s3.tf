@@ -1,7 +1,7 @@
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # S3 — Encrypted Mission Data Storage
-# Simulates classified data lake for edge telemetry and mission outputs
-# All access via VPC endpoint only (no internet path)
+# AES-256 KMS encryption, VPC endpoint access, lifecycle policies
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ─────────────────────────────────────────────
@@ -9,20 +9,18 @@
 # ─────────────────────────────────────────────
 
 resource "aws_s3_bucket" "mission_data" {
-  bucket = "${var.project_name}-${var.environment}-mission-data-${data.aws_caller_identity.current.account_id}"
+  bucket = "${var.project_name}-${var.environment}-data-${data.aws_caller_identity.current.account_id}"
 
-  # Prevent accidental deletion of mission data
-  force_destroy = false
-
-  tags = {
-    Name           = "${var.project_name}-${var.environment}-mission-data"
-    Classification = "SENSITIVE"
-    DataType       = "mission-telemetry"
-  }
+  tags = merge(var.tags, {
+    Name        = "${var.project_name}-${var.environment}-mission-data"
+    DataClass   = "SOVEREIGN"
+    Encryption  = "KMS-CMK"
+    Compliance  = "IL5"
+  })
 }
 
 # ─────────────────────────────────────────────
-# ENCRYPTION — SSE-KMS with customer-managed key
+# ENCRYPTION — KMS Server-Side Encryption
 # ─────────────────────────────────────────────
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "mission_data" {
@@ -33,12 +31,12 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "mission_data" {
       sse_algorithm     = "aws:kms"
       kms_master_key_id = aws_kms_key.sovereign.arn
     }
-    bucket_key_enabled = true  # Reduces KMS API calls
+    bucket_key_enabled = true
   }
 }
 
 # ─────────────────────────────────────────────
-# VERSIONING — Protect against accidental overwrites
+# VERSIONING — Protect against accidental deletion
 # ─────────────────────────────────────────────
 
 resource "aws_s3_bucket_versioning" "mission_data" {
@@ -50,7 +48,7 @@ resource "aws_s3_bucket_versioning" "mission_data" {
 }
 
 # ─────────────────────────────────────────────
-# BLOCK ALL PUBLIC ACCESS — Non-negotiable for sovereign
+# PUBLIC ACCESS BLOCK — No public access ever
 # ─────────────────────────────────────────────
 
 resource "aws_s3_bucket_public_access_block" "mission_data" {
@@ -63,12 +61,15 @@ resource "aws_s3_bucket_public_access_block" "mission_data" {
 }
 
 # ─────────────────────────────────────────────
-# BUCKET POLICY — VPC Endpoint access only
-# Denies any request NOT from our VPC endpoint
+# BUCKET POLICY — VPC Endpoint + TLS + KMS enforcement
+# Allows terraform-user to manage the bucket from outside VPC
 # ─────────────────────────────────────────────
 
 resource "aws_s3_bucket_policy" "mission_data" {
   bucket = aws_s3_bucket.mission_data.id
+
+  # Ensure public access block is applied first
+  depends_on = [aws_s3_bucket_public_access_block.mission_data]
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -85,6 +86,12 @@ resource "aws_s3_bucket_policy" "mission_data" {
         Condition = {
           StringNotEquals = {
             "aws:sourceVpce" = aws_vpc_endpoint.s3.id
+          }
+          ArnNotEquals = {
+            "aws:PrincipalArn" = [
+              "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/terraform-user",
+              "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+            ]
           }
         }
       },
@@ -127,6 +134,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "mission_data" {
   bucket = aws_s3_bucket.mission_data.id
 
   rule {
+    filter {}
     id     = "transition-to-ia"
     status = "Enabled"
 
@@ -140,13 +148,18 @@ resource "aws_s3_bucket_lifecycle_configuration" "mission_data" {
       storage_class = "GLACIER"
     }
 
-    # Keep non-current versions for 30 days (recovery window)
-    noncurrent_version_expiration {
+    noncurrent_version_transition {
       noncurrent_days = 30
+      storage_class   = "GLACIER"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 365
     }
   }
 
   rule {
+    filter {}
     id     = "abort-incomplete-uploads"
     status = "Enabled"
 
@@ -157,18 +170,16 @@ resource "aws_s3_bucket_lifecycle_configuration" "mission_data" {
 }
 
 # ─────────────────────────────────────────────
-# ACCESS LOGGING — Audit trail for all bucket access
+# ACCESS LOGS BUCKET
 # ─────────────────────────────────────────────
 
 resource "aws_s3_bucket" "access_logs" {
   bucket = "${var.project_name}-${var.environment}-access-logs-${data.aws_caller_identity.current.account_id}"
 
-  force_destroy = true
-
-  tags = {
-    Name    = "${var.project_name}-${var.environment}-access-logs"
-    Purpose = "s3-access-logging"
-  }
+  tags = merge(var.tags, {
+    Name     = "${var.project_name}-${var.environment}-access-logs"
+    Purpose  = "S3 access logging"
+  })
 }
 
 resource "aws_s3_bucket_public_access_block" "access_logs" {
@@ -185,11 +196,28 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "access_logs" {
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.sovereign.arn
+      sse_algorithm = "AES256"
     }
   }
 }
+
+resource "aws_s3_bucket_lifecycle_configuration" "access_logs" {
+  bucket = aws_s3_bucket.access_logs.id
+
+  rule {
+    filter {}
+    id     = "expire-old-logs"
+    status = "Enabled"
+
+    expiration {
+      days = 90
+    }
+  }
+}
+
+# ─────────────────────────────────────────────
+# ACCESS LOGGING — Mission data → Logs bucket
+# ─────────────────────────────────────────────
 
 resource "aws_s3_bucket_logging" "mission_data" {
   bucket = aws_s3_bucket.mission_data.id

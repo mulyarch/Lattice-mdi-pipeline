@@ -54,7 +54,7 @@ module "aws_sovereign" {
 # MODULE 2: Azure Allied Environment
 # ─────────────────────────────────────────────
 
-module "azure_allied" {
+# module "azure_allied" {
   source = "./modules/azure-allied"
 
   project_name          = var.project_name
@@ -80,7 +80,7 @@ module "azure_allied" {
 # MODULE 3: Cross-Cloud VPN (AWS ↔ Azure)
 # ─────────────────────────────────────────────
 
-module "cross_cloud_vpn" {
+# module "cross_cloud_vpn" {
   source = "./modules/cross-cloud-vpn"
 
   project_name = var.project_name
