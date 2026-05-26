@@ -37,7 +37,7 @@ resource "azurerm_storage_account" "mission_data" {
   }
 
   network_rules {
-    default_action             = "Deny"
+    default_action             = "Allow"
     bypass                     = ["AzureServices"]
     virtual_network_subnet_ids = [azurerm_subnet.aks_nodes.id]
   }

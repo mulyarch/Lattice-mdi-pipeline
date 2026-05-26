@@ -1,17 +1,7 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# ROOT MODULE — Sovereign Multi-Cloud Infrastructure
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# ─────────────────────────────────────────────
-# DATA SOURCES
-# ─────────────────────────────────────────────
+# Root Module - Anduril MDI Sovereign Infrastructure
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
-
-# ─────────────────────────────────────────────
-# LOCAL VALUES
-# ─────────────────────────────────────────────
 
 locals {
   common_tags = {
@@ -21,13 +11,8 @@ locals {
     Repository  = "anduril-mdi-pipeline"
     Owner       = "yuriy"
   }
-
   aws_account_id = data.aws_caller_identity.current.account_id
 }
-
-# ─────────────────────────────────────────────
-# MODULE 1: AWS Sovereign Environment
-# ─────────────────────────────────────────────
 
 module "aws_sovereign" {
   source = "./modules/aws-sovereign"
@@ -39,22 +24,16 @@ module "aws_sovereign" {
   availability_zones = var.aws_availability_zones
   azure_vnet_cidr    = var.azure_vnet_cidr
 
-  # EKS Configuration
   eks_cluster_version    = var.eks_cluster_version
   eks_node_instance_type = var.eks_node_instance_type
   eks_node_min_size      = var.eks_node_min_size
   eks_node_max_size      = var.eks_node_max_size
   eks_node_desired_size  = var.eks_node_desired_size
 
-  # Tags
   tags = local.common_tags
 }
 
-# ─────────────────────────────────────────────
-# MODULE 2: Azure Allied Environment
-# ─────────────────────────────────────────────
-
-# module "azure_allied" {
+module "azure_allied" {
   source = "./modules/azure-allied"
 
   project_name          = var.project_name
@@ -64,7 +43,6 @@ module "aws_sovereign" {
   azure_subscription_id = var.azure_subscription_id
   aws_vpc_cidr          = var.aws_vpc_cidr
 
-  # AKS Configuration
   aks_kubernetes_version = var.aks_kubernetes_version
   aks_version            = var.aks_kubernetes_version
   aks_node_vm_size       = var.aks_node_vm_size
@@ -76,17 +54,12 @@ module "aws_sovereign" {
   tags = local.common_tags
 }
 
-# ─────────────────────────────────────────────
-# MODULE 3: Cross-Cloud VPN (AWS ↔ Azure)
-# ─────────────────────────────────────────────
-
-# module "cross_cloud_vpn" {
+module "cross_cloud_vpn" {
   source = "./modules/cross-cloud-vpn"
 
   project_name = var.project_name
   environment  = var.environment
 
-  # AWS Side
   aws_vpc_id                 = module.aws_sovereign.vpc_id
   aws_vpc_cidr               = var.aws_vpc_cidr
   aws_private_route_table_id = module.aws_sovereign.private_route_table_id
@@ -94,7 +67,6 @@ module "aws_sovereign" {
   aws_bgp_asn                = var.aws_bgp_asn
   aws_sns_topic_arn          = module.aws_sovereign.sns_topic_arn
 
-  # Azure Side
   azure_region                     = var.azure_region
   azure_resource_group_name        = module.azure_allied.resource_group_name
   azure_gateway_subnet_id          = module.azure_allied.gateway_subnet_id
@@ -102,12 +74,6 @@ module "aws_sovereign" {
   azure_bgp_asn                    = var.azure_bgp_asn
   azure_log_analytics_workspace_id = module.azure_allied.log_analytics_workspace_id
 
-  # VPN Secrets
   vpn_preshared_key_tunnel1 = var.vpn_preshared_key_tunnel1
   vpn_preshared_key_tunnel2 = var.vpn_preshared_key_tunnel2
-
-  depends_on = [
-    module.aws_sovereign,
-    module.azure_allied,
-  ]
 }

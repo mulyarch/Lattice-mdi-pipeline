@@ -76,6 +76,7 @@ resource "azurerm_public_ip" "vpn_gateway" {
   location            = var.azure_region
   resource_group_name = var.azure_resource_group_name
   allocation_method   = "Static"
+  zones               = ["1", "2", "3"]
   sku                 = "Standard"
 
   tags = {
@@ -90,7 +91,7 @@ resource "azurerm_virtual_network_gateway" "allied" {
   resource_group_name = var.azure_resource_group_name
   type                = "Vpn"
   vpn_type            = "RouteBased"
-  sku                 = "VpnGw1"
+  sku                 = "VpnGw1AZ"
   active_active       = false
   enable_bgp          = true
 

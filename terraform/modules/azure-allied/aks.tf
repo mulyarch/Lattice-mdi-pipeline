@@ -12,7 +12,7 @@ resource "azurerm_kubernetes_cluster" "allied" {
   location            = azurerm_resource_group.allied.location
   resource_group_name = azurerm_resource_group.allied.name
   dns_prefix          = "${var.project_name}-${var.environment}"
-  kubernetes_version  = var.aks_version
+  # kubernetes_version  = var.aks_version
 
   # CRITICAL: Private cluster — no public API endpoint
   private_cluster_enabled = true

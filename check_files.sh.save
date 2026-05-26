@@ -1,0 +1,18 @@
+```python
+```bash
+#!/bin/bash
+
+# Run from the root of your anduril-mdi-pipeline directory
+echo "=== Checking Project Files ==="
+echo ""
+
+FILES=(
+  # Step 1 - Project Structure
+  ".gitignore"
+  "README.md"
+  ".github/workflows/ci.yml"
+  ".github/workflows/deploy-infra.yml"
+  ".github/workflows/configure.yml"
+  ".github/workflows/deploy-app.yml"
+
+

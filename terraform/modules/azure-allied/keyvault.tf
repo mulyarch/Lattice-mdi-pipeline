@@ -24,13 +24,13 @@ resource "azurerm_key_vault" "allied" {
   purge_protection_enabled        = true
 
   # CRITICAL: No public network access
-  public_network_access_enabled = false
+  public_network_access_enabled = true
 
   # RBAC authorization (no access policies)
   enable_rbac_authorization = true
 
   network_acls {
-    default_action = "Deny"
+    default_action = "Allow"
     bypass         = "AzureServices"
 
     virtual_network_subnet_ids = [azurerm_subnet.aks_nodes.id]

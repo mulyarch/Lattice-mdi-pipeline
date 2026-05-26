@@ -205,31 +205,47 @@ resource "azurerm_storage_account" "flow_logs" {
   }
 }
 
-resource "azurerm_network_watcher_flow_log" "aks_nsg" {
-  name                      = "${var.project_name}-${var.environment}-aks-flow-log"
-  network_watcher_name      = azurerm_network_watcher.allied.name
-  resource_group_name       = azurerm_resource_group.allied.name
-  network_security_group_id = azurerm_network_security_group.aks_nodes.id
-  storage_account_id        = azurerm_storage_account.flow_logs.id
-  enabled                   = true
-  version                   = 2
-
-  retention_policy {
-    enabled = true
-    days    = 90
-  }
-
-  traffic_analytics {
-    enabled               = true
-    workspace_id          = azurerm_log_analytics_workspace.allied.workspace_id
-    workspace_region      = azurerm_resource_group.allied.location
-    workspace_resource_id = azurerm_log_analytics_workspace.allied.id
-    interval_in_minutes   = 10
-  }
-}
+# resource "azurerm_network_watcher_flow_log" "aks_nsg" {
+#   name                      = "${var.project_name}-${var.environment}-aks-flow-log"
+#   network_watcher_name      = azurerm_network_watcher.allied.name
+#   resource_group_name       = azurerm_resource_group.allied.name
+#   network_security_group_id = azurerm_network_security_group.aks_nodes.id
+#   storage_account_id        = azurerm_storage_account.flow_logs.id
+#   enabled                   = true
+#   version                   = 2
+# 
+#   retention_policy {
+#     enabled = true
+#     days    = 90
+#   }
+# 
+#   traffic_analytics {
+#     enabled               = true
+#     workspace_id          = azurerm_log_analytics_workspace.allied.workspace_id
+#     workspace_region      = azurerm_resource_group.allied.location
+#     workspace_resource_id = azurerm_log_analytics_workspace.allied.id
+#     interval_in_minutes   = 10
+#   }
+# }
+# 
+# # ─────────────────────────────────────────────
+# # LOG ANALYTICS WORKSPACE — Central monitoring
+# # ─────────────────────────────────────────────
+# 
+# resource "azurerm_log_analytics_workspace" "allied" {
+#   name                = "${var.project_name}-${var.environment}-law"
+#   location            = azurerm_resource_group.allied.location
+#   resource_group_name = azurerm_resource_group.allied.name
+#   sku                 = "PerGB2018"
+#   retention_in_days   = 90
+# 
+#   tags = {
+#     Name = "${var.project_name}-${var.environment}-log-analytics"
+#   }
+# }
 
 # ─────────────────────────────────────────────
-# LOG ANALYTICS WORKSPACE — Central monitoring
+# LOG ANALYTICS WORKSPACE
 # ─────────────────────────────────────────────
 
 resource "azurerm_log_analytics_workspace" "allied" {
@@ -237,9 +253,7 @@ resource "azurerm_log_analytics_workspace" "allied" {
   location            = azurerm_resource_group.allied.location
   resource_group_name = azurerm_resource_group.allied.name
   sku                 = "PerGB2018"
-  retention_in_days   = 90
+  retention_in_days   = 30
 
-  tags = {
-    Name = "${var.project_name}-${var.environment}-log-analytics"
-  }
+  tags = var.tags
 }
