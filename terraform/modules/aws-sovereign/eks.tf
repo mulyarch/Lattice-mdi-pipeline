@@ -11,7 +11,7 @@
 resource "aws_eks_cluster" "sovereign" {
   name     = "${var.project_name}-${var.environment}"
   role_arn = aws_iam_role.eks_cluster.arn
-  version  = var.eks_version
+  version  = var.eks_cluster_version
 
   vpc_config {
     subnet_ids              = aws_subnet.private[*].id
@@ -84,7 +84,7 @@ resource "aws_eks_node_group" "sovereign_workers" {
 
   # Use latest Amazon Linux 2 EKS-optimized AMI
   ami_type       = "AL2_x86_64"
-  instance_types = var.eks_instance_types
+  instance_types = [var.eks_node_instance_type]
   capacity_type  = "ON_DEMAND"  # Mission-critical = no spot
 
   # Encrypted EBS volumes

@@ -49,8 +49,8 @@ resource "azurerm_kubernetes_cluster" "allied" {
     network_plugin    = "azure"
     network_policy    = "calico"
     load_balancer_sku = "standard"
-    service_cidr      = "[IP_ADDRESS]"
-    dns_service_ip    = "[IP_ADDRESS]"
+    service_cidr      = "172.16.0.0/16"
+    dns_service_ip    = "172.16.0.10"
   }
 
   # Azure AD RBAC integration
