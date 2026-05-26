@@ -1,0 +1,33 @@
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+!*.tfvars.example
+crash.log
+
+# Ansible
+*.retry
+
+# Python
+__pycache__/
+*.py[cod]
+.env
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (NEVER commit)
+*.pem
+*.key
+secrets/
+
+
