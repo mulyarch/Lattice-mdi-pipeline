@@ -2,9 +2,14 @@
 # Triggers on every push and pull request   
 # Stages: Lint → Validate → Security Scan → Cost Estimate
 # ═══════════════════════════════════════════════════════════════════════════════
+# CI PIPELINE — Sovereign Multi-Cloud Infrastructure
+# Triggers on every push and pull request
+# Stages: Lint → Validate → Security Scan → Cost Estimate
+# ═══════════════════════════════════════════════════════════════════════════════
 name: "CI — Lint, Validate & Security Scan"
 on:
-  workflow_dispatch:  push:
+  workflow_dispatch:
+  push:
     branches: [main, develop]
     paths:
       - 'terraform/**'
@@ -21,8 +26,6 @@ on:
       - 'ansible/**'
       - 'edge-app/**'
       - 'security/**'
-
-role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
 env:
   TF_VERSION: "1.7.0"
