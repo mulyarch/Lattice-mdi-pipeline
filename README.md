@@ -1,5 +1,5 @@
 
-# 🛡️ Anduril MDI Sovereign Infrastructure — Multi-Cloud Architecture
+# 🛡️ Lattice MDI Sovereign Infrastructure — Multi-Cloud Architecture
 
 
 > A production-grade, multi-cloud sovereign infrastructure deployment spanning AWS and Azure, designed for mission-critical defense workloads with zero-trust security, encrypted communications, and automated CI/CD pipelines.
@@ -76,8 +76,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yuriymul/anduril-mdi-pipeline.git
-cd anduril-mdi-pipeline/terraform
+git clone https://github.com/yuriymul/Lattice-mdi-pipeline.git
+cd Lattice-mdi-pipeline/terraform
 
 # Initialize Terraform
 terraform init
