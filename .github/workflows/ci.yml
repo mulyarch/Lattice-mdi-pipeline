@@ -22,6 +22,8 @@ on:
       - 'edge-app/**'
       - 'security/**'
 
+role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
 env:
   TF_VERSION: "1.7.0"
   TFSEC_VERSION: "latest"
