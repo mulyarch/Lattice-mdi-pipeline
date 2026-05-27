@@ -1,0 +1,15 @@
+project_name       = "mdi-sovereign"
+environment        = "dev"
+aws_region         = "us-east-1"
+aws_vpc_cidr       = "10.0.0.0/16"
+azure_subscription_id = "6c33a25e-2c42-4d6e-a8b5-914d12fe01d3"
+azure_region              = "australiaeast"
+aks_kubernetes_version    = "1.31"
+aks_node_vm_size          = "Standard_D2s_v3"
+aks_node_min_count        = 2
+aks_node_max_count        = 3
+aws_bgp_asn               = 64512
+azure_bgp_asn             = 65515
+vpn_preshared_key_tunnel1 = "Anduril.MDI_Sovereign.Tunnel1_Key2024"
+vpn_preshared_key_tunnel2 = "Anduril.MDI_Sovereign.Tunnel2_Key2024"
+aws_availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]

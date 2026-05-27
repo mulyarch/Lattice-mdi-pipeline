@@ -118,7 +118,7 @@ jobs:
 
       - name: Terraform Plan
         working-directory: terraform
-        run: terraform plan -no-color -lock=false -out=tfplan -var="azure_subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+        run: terraform plan -no-color -lock=false -out=tfplan
 
       - name: Upload Plan Artifact
         uses: actions/upload-artifact@v4
