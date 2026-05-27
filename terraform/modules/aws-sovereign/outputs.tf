@@ -4,7 +4,7 @@
 
 output "vpc_id" {
   description = "ID of the sovereign VPC"
-  value       = aws_vpc.sovereign.id
+  value       = aws_vpc.main.id
 }
 
 output "private_subnet_ids" {

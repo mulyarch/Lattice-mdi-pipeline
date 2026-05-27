@@ -15,7 +15,6 @@ resource "aws_eks_cluster" "sovereign" {
 
   vpc_config {
     subnet_ids              = aws_subnet.private[*].id
-    security_group_ids      = [aws_security_group.eks_cluster.id]
 
     # CRITICAL: Private endpoint only — no public API access
     endpoint_private_access = true
@@ -58,7 +57,6 @@ resource "aws_eks_cluster" "sovereign" {
 resource "aws_cloudwatch_log_group" "eks" {
   name              = "/aws/eks/${var.project_name}-${var.environment}/cluster"
   retention_in_days = 90
-  kms_key_id        = aws_kms_key.sovereign.arn
 
   tags = {
     Name = "${var.project_name}-${var.environment}-eks-logs"
@@ -85,15 +83,7 @@ resource "aws_eks_node_group" "sovereign_workers" {
   # Use latest Amazon Linux 2 EKS-optimized AMI
   ami_type       = "AL2_x86_64"
   instance_types = [var.eks_node_instance_type]
-  capacity_type  = "ON_DEMAND"  # Mission-critical = no spot
-
-  # Encrypted EBS volumes
-
-  # Launch template for additional security config
-  launch_template {
-    id      = aws_launch_template.eks_workers.id
-    version = aws_launch_template.eks_workers.latest_version
-  }
+  capacity_type  = "ON_DEMAND"
 
   update_config {
     max_unavailable = 1
@@ -104,7 +94,6 @@ resource "aws_eks_node_group" "sovereign_workers" {
     workload    = "mission"
   }
 
-  # Taint for workload isolation (optional)
   taint {
     key    = "workload"
     value  = "mission-critical"
@@ -121,9 +110,6 @@ resource "aws_eks_node_group" "sovereign_workers" {
     Name = "${var.project_name}-${var.environment}-eks-workers"
   }
 }
-
-# ─────────────────────────────────────────────
-# LAUNCH TEMPLATE — Hardened worker node config
 # ─────────────────────────────────────────────
 
 resource "aws_launch_template" "eks_workers" {
@@ -137,7 +123,6 @@ resource "aws_launch_template" "eks_workers" {
       volume_size           = 50
       volume_type           = "gp3"
       encrypted             = true
-      kms_key_id            = aws_kms_key.sovereign.arn
       delete_on_termination = true
     }
   }

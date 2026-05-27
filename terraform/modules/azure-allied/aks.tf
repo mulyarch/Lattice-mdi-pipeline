@@ -15,8 +15,9 @@ resource "azurerm_kubernetes_cluster" "allied" {
   # kubernetes_version  = var.aks_version
 
   # CRITICAL: Private cluster — no public API endpoint
-  private_cluster_enabled = true
-
+  private_cluster_enabled = false
+  oidc_issuer_enabled     = true
+  workload_identity_enabled = true
   # System-assigned managed identity (no service principal secrets)
   identity {
     type = "SystemAssigned"
@@ -25,7 +26,6 @@ resource "azurerm_kubernetes_cluster" "allied" {
   # Default node pool (system workloads)
   default_node_pool {
     name                = "system"
-    node_count          = var.aks_system_node_count
     vm_size             = var.aks_system_vm_size
     vnet_subnet_id      = azurerm_subnet.aks_nodes.id
     os_disk_size_gb     = 50
@@ -89,7 +89,6 @@ resource "azurerm_kubernetes_cluster_node_pool" "mission" {
   name                  = "mission"
   kubernetes_cluster_id = azurerm_kubernetes_cluster.allied.id
   vm_size               = var.aks_mission_vm_size
-  node_count            = var.aks_mission_node_count
   vnet_subnet_id        = azurerm_subnet.aks_nodes.id
   os_disk_size_gb       = 100
   os_disk_type          = "Managed"
