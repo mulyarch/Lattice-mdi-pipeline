@@ -1,9 +1,8 @@
-name: "CI — Lint, Validate & Security Scan"
 # CI PIPELINE — Sovereign Multi-Cloud Infrastructure
 # Triggers on every push and pull request   
 # Stages: Lint → Validate → Security Scan → Cost Estimate
 # ═══════════════════════════════════════════════════════════════════════════════
-
+name: "CI — Lint, Validate & Security Scan"
 on:
   push:
     branches: [main, develop]
