@@ -118,7 +118,7 @@ jobs:
 
       - name: Terraform Plan
         working-directory: terraform
-        run: terraform plan -no-color -lock=false -out=tfplan
+        run: terraform plan -no-color -lock=false -out=tfplan -target=module.aws_sovereign
 
       - name: Upload Plan Artifact
         uses: actions/upload-artifact@v4
