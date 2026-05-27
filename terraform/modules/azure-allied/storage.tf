@@ -52,19 +52,19 @@ resource "azurerm_storage_account" "mission_data" {
 # STORAGE CONTAINERS — Mission telemetry
 # ─────────────────────────────────────────────
 
-resource "azurerm_storage_container" "telemetry" {
-  name                  = "mission-telemetry"
-  storage_account_name  = azurerm_storage_account.mission_data.name
-  container_access_type = "private"
-}
-
-resource "azurerm_storage_container" "edge_data" {
-  name                  = "edge-ingest"
-  storage_account_name  = azurerm_storage_account.mission_data.name
-  container_access_type = "private"
-}
-
-# ─────────────────────────────────────────────
+# # resource "azurerm_storage_container" "telemetry" {
+# #   name                  = "mission-telemetry"
+# #   storage_account_name  = azurerm_storage_account.mission_data.name
+# #   container_access_type = "private"
+# # }
+# # 
+# # resource "azurerm_storage_container" "edge_data" {
+# #   name                  = "edge-ingest"
+# #   storage_account_name  = azurerm_storage_account.mission_data.name
+# #   container_access_type = "private"
+# # }
+# # 
+# # # ─────────────────────────────────────────────
 # PRIVATE ENDPOINT — No public access to storage
 # ─────────────────────────────────────────────
 
