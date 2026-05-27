@@ -1,10 +1,6 @@
 
 # 🛡️ Anduril MDI Sovereign Infrastructure — Multi-Cloud Architecture
 
-[![Terraform Validate](https://github.com/yuriymul/anduril-mdi-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/yuriymul/anduril-mdi-pipeline/actions)
-[![Infrastructure](https://img.shields.io/badge/IaC-Terraform-purple)](https://www.terraform.io/)
-[![AWS](https://img.shields.io/badge/Cloud-AWS%20GovCloud-orange)](https://aws.amazon.com/)
-[![Azure](https://img.shields.io/badge/Cloud-Azure-blue)](https://azure.microsoft.com/)
 
 > A production-grade, multi-cloud sovereign infrastructure deployment spanning AWS and Azure, designed for mission-critical defense workloads with zero-trust security, encrypted communications, and automated CI/CD pipelines.
 
